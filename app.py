@@ -179,12 +179,4 @@ if question:
         st.write(answer)
         st.caption(f"Response time: {elapsed:.2f}s")
 
-        with st.expander("📑 Relevant document chunks"):
-            relevant_docs = retriever.invoke(question)
-            for i, doc in enumerate(relevant_docs):
-                src = doc.metadata.get("source", "unknown")
-                sheet = doc.metadata.get("sheet", "")
-                label = f"**Chunk {i + 1}** — `{src}`" + (f" / Sheet: `{sheet}`" if sheet else "")
-                st.markdown(label)
-                st.write(doc.page_content)
-                st.divider()
+
