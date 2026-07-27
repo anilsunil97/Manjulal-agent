@@ -1,0 +1,14 @@
+faiss-cpu
+groq
+langchain-groq
+langchain-google-genai
+langchain
+langchain-core
+langchain-community
+langchain-text-splitters
+streamlit
+python-dotenv
+pypdf
+openpyxl
+pandas
+google-cloud-aiplatform>=1.38
