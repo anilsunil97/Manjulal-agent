@@ -44,10 +44,20 @@ def load_gif_as_base64(path: str) -> str:
 col_logo, col_title = st.columns([1, 5])
 with col_logo:
     gif_path = os.path.join(os.path.dirname(__file__), "static", "motu.gif")
+    mp4_path = os.path.join(os.path.dirname(__file__), "static", "WhatsApp Video 2026-07-28 at 20.12.36.mp4")
     if os.path.exists(gif_path):
         gif_b64 = load_gif_as_base64(gif_path)
         st.markdown(
             f'<img src="data:image/gif;base64,{gif_b64}" width="80" style="border-radius:12px;" alt="Motu">',
+            unsafe_allow_html=True,
+        )
+    elif os.path.exists(mp4_path):
+        with open(mp4_path, "rb") as f:
+            mp4_b64 = base64.b64encode(f.read()).decode()
+        st.markdown(
+            f'<video width="80" autoplay loop muted playsinline style="border-radius:12px;">'
+            f'<source src="data:video/mp4;base64,{mp4_b64}" type="video/mp4">'
+            f'</video>',
             unsafe_allow_html=True,
         )
     else:
