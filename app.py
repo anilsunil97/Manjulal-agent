@@ -36,7 +36,7 @@ DOCS_DIR = os.path.join(os.path.dirname(__file__), "petpooja_docs")
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Petpooja Document Q&A", page_icon="📄", layout="centered")
 st.title("📄 Petpooja — Document Q&A")
-st.caption(f"Reads all PDF and Excel files from the `petpooja_docs` folder automatically.")
+
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm = ChatGroq(
