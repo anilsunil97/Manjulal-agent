@@ -105,21 +105,14 @@ def load_all_docs_from_folder(folder: str) -> list[Document]:
     return all_docs
 
 
-# ── Show files present in folder ──────────────────────────────────────────────
+# ── Resolve files present in folder ──────────────────────────────────────────
 if not os.path.isdir(DOCS_DIR):
     os.makedirs(DOCS_DIR)
-    st.warning("📁 `petpooja_docs` folder was just created. Add your PDF/Excel files and click **Load & Embed**.")
-else:
-    files_present = [
-        f for f in os.listdir(DOCS_DIR)
-        if f.lower().endswith((".pdf", ".xlsx", ".xls"))
-    ]
-    if files_present:
-        with st.expander(f"📁 Files in `petpooja_docs` ({len(files_present)} found)", expanded=False):
-            for f in files_present:
-                st.write(f"• {f}")
-    else:
-        st.warning("📁 No PDF or Excel files found in `petpooja_docs`. Please add files and click **Load & Embed**.")
+
+files_present = [
+    f for f in os.listdir(DOCS_DIR)
+    if f.lower().endswith((".pdf", ".xlsx", ".xls"))
+] if os.path.isdir(DOCS_DIR) else []
 
 # ── Buttons ───────────────────────────────────────────────────────────────────
 col1, col2 = st.columns([1, 1])
