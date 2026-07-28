@@ -15,11 +15,9 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 # Load environment variables
-# Works locally via .env and in production via Streamlit Cloud secrets
 load_dotenv()
 
 def get_secret(key: str) -> str:
-    """Read from .env locally, fall back to st.secrets on Streamlit Cloud."""
     value = os.getenv(key)
     if not value:
         try:
@@ -34,9 +32,8 @@ os.environ["GOOGLE_API_KEY"] = get_secret("GOOGLE_API_KEY")
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "petpooja_docs")
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Petpooja Document Q&A", page_icon="📄", layout="centered")
-st.title("📄 Petpooja — Document Q&A")
-
+st.set_page_config(page_title="Petpooja Assistant", page_icon="🤖", layout="centered")
+st.title("🤖 Petpooja Assistant")
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm = ChatGroq(
@@ -44,10 +41,10 @@ llm = ChatGroq(
     model_name="openai/gpt-oss-120b",
 )
 
-# ── Prompt template ───────────────────────────────────────────────────────────
-prompt = ChatPromptTemplate.from_template(
-    """Answer the question based only on the provided context.
-Give the most accurate and concise response possible.
+# ── Prompts ───────────────────────────────────────────────────────────────────
+doc_prompt = ChatPromptTemplate.from_template(
+    """You are a helpful assistant. Answer the question using the provided document context.
+If the context does not contain enough information, answer from your general knowledge and mention that.
 
 Context:
 {context}
@@ -56,6 +53,11 @@ Question: {input}
 
 Answer:"""
 )
+
+chat_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful, friendly assistant. Answer clearly and concisely."),
+    ("human", "{input}"),
+])
 
 
 def format_docs(docs):
@@ -74,12 +76,10 @@ def load_excel(filepath: str) -> list[Document]:
     for sheet in xl.sheet_names:
         df = xl.parse(sheet)
         text = f"Sheet: {sheet}\n\n{df.to_string(index=False)}"
-        docs.append(
-            Document(
-                page_content=text,
-                metadata={"source": os.path.basename(filepath), "sheet": sheet},
-            )
-        )
+        docs.append(Document(
+            page_content=text,
+            metadata={"source": os.path.basename(filepath), "sheet": sheet},
+        ))
     return docs
 
 
@@ -87,10 +87,6 @@ def load_all_docs_from_folder(folder: str) -> list[Document]:
     all_docs = []
     supported = (".pdf", ".xlsx", ".xls")
     files = [f for f in os.listdir(folder) if f.lower().endswith(supported)]
-
-    if not files:
-        return []
-
     for filename in files:
         filepath = os.path.join(folder, filename)
         ext = os.path.splitext(filename)[1].lower()
@@ -101,11 +97,10 @@ def load_all_docs_from_folder(folder: str) -> list[Document]:
                 all_docs.extend(load_excel(filepath))
         except Exception as e:
             st.warning(f"⚠️ Could not load `{filename}`: {e}")
-
     return all_docs
 
 
-# ── Resolve files present in folder ──────────────────────────────────────────
+# ── Resolve files in folder ───────────────────────────────────────────────────
 if not os.path.isdir(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
@@ -114,62 +109,75 @@ files_present = [
     if f.lower().endswith((".pdf", ".xlsx", ".xls"))
 ] if os.path.isdir(DOCS_DIR) else []
 
-# ── Buttons ───────────────────────────────────────────────────────────────────
-col1, col2 = st.columns([1, 1])
-with col1:
+# ── Session state ─────────────────────────────────────────────────────────────
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.header("📁 Document Mode")
     embed_btn = st.button("📥 Load & Embed Documents", use_container_width=True)
-with col2:
-    if st.button("🗑️ Clear & Reset", use_container_width=True):
-        for key in ["vectors", "doc_count", "file_count"]:
+
+    if "vectors" in st.session_state:
+        st.success(f"✅ {st.session_state.get('doc_count', 0)} chunks loaded")
+        st.caption("Questions will be answered from documents + general knowledge.")
+    else:
+        st.info("No documents embedded yet.\nChat works in general mode.")
+
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+    if st.button("🔄 Reset Documents", use_container_width=True):
+        for key in ["vectors", "doc_count"]:
             st.session_state.pop(key, None)
-        st.success("Reset complete.")
+        st.rerun()
 
 # ── Embedding logic ───────────────────────────────────────────────────────────
 if embed_btn:
-    with st.spinner("Reading files from `petpooja_docs`…"):
+    with st.spinner("Reading and embedding documents…"):
         all_docs = load_all_docs_from_folder(DOCS_DIR)
-
-    if not all_docs:
-        st.error("No content found. Please add PDF or Excel files to the `petpooja_docs` folder.")
-    else:
-        with st.spinner("Embedding documents…"):
+        if not all_docs:
+            st.sidebar.error("No files found in `petpooja_docs`.")
+        else:
             splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             split_docs = splitter.split_documents(all_docs)
             embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
             st.session_state.vectors = FAISS.from_documents(split_docs, embeddings)
             st.session_state.doc_count = len(split_docs)
-            st.session_state.file_count = len(files_present)
+            st.rerun()
 
-        st.success(
-            f"✅ Embedded {st.session_state['doc_count']} chunks "
-            f"from {st.session_state['file_count']} file(s). Ask your question below!"
-        )
+# ── Display chat history ──────────────────────────────────────────────────────
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-st.divider()
+# ── Chat input ────────────────────────────────────────────────────────────────
+if question := st.chat_input("Ask me anything…"):
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question)
 
-# ── Question input ────────────────────────────────────────────────────────────
-question = st.text_input("💬 Enter your question about the documents")
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking…"):
+            try:
+                if "vectors" in st.session_state:
+                    # Document-grounded RAG answer
+                    retriever = st.session_state.vectors.as_retriever()
+                    rag_chain = (
+                        {"context": retriever | format_docs, "input": RunnablePassthrough()}
+                        | doc_prompt
+                        | llm
+                        | StrOutputParser()
+                    )
+                    answer = rag_chain.invoke(question)
+                else:
+                    # Plain conversational answer
+                    chain = chat_prompt | llm | StrOutputParser()
+                    answer = chain.invoke({"input": question})
 
-if question:
-    if "vectors" not in st.session_state:
-        st.warning("Please click **Load & Embed Documents** first.")
-    else:
-        retriever = st.session_state.vectors.as_retriever()
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
 
-        rag_chain = (
-            {"context": retriever | format_docs, "input": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-        )
-
-        with st.spinner("Searching documents…"):
-            start = time.process_time()
-            answer = rag_chain.invoke(question)
-            elapsed = time.process_time() - start
-
-        st.subheader("Answer")
-        st.write(answer)
-        st.caption(f"Response time: {elapsed:.2f}s")
-
-
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
