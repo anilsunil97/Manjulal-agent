@@ -32,8 +32,20 @@ os.environ["GOOGLE_API_KEY"] = get_secret("GOOGLE_API_KEY")
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "petpooja_docs")
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Petpooja Assistant", page_icon="🤖", layout="centered")
-st.title("🤖 Petpooja Assistant")
+st.set_page_config(page_title="Petpooja Assistant", page_icon="💃", layout="centered")
+
+# ── Header with dancing GIF logo ─────────────────────────────────────────────
+col_logo, col_title = st.columns([1, 5])
+with col_logo:
+    st.markdown(
+        """
+        <img src="https://media.giphy.com/media/l0MYGb1LuZ3n7dRnO/giphy.gif"
+             width="80" style="border-radius: 12px;" alt="dancing logo">
+        """,
+        unsafe_allow_html=True,
+    )
+with col_title:
+    st.title("Petpooja Assistant")
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm = ChatGroq(
