@@ -34,16 +34,28 @@ DOCS_DIR = os.path.join(os.path.dirname(__file__), "petpooja_docs")
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Petpooja Assistant", page_icon="💃", layout="centered")
 
-# ── Header with dancing GIF logo ─────────────────────────────────────────────
+# ── Header with Motu sticker logo ────────────────────────────────────────────
+import base64
+
+def load_gif_as_base64(path: str) -> str:
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
 col_logo, col_title = st.columns([1, 5])
 with col_logo:
-    st.markdown(
-        """
-        <img src="https://media.giphy.com/media/l0MYGb1LuZ3n7dRnO/giphy.gif"
-             width="80" style="border-radius: 12px;" alt="dancing logo">
-        """,
-        unsafe_allow_html=True,
-    )
+    gif_path = os.path.join(os.path.dirname(__file__), "static", "motu.gif")
+    if os.path.exists(gif_path):
+        gif_b64 = load_gif_as_base64(gif_path)
+        st.markdown(
+            f'<img src="data:image/gif;base64,{gif_b64}" width="80" style="border-radius:12px;" alt="Motu">',
+            unsafe_allow_html=True,
+        )
+    else:
+        # Fallback: Motu Patlu GIF from Giphy
+        st.markdown(
+            '<img src="https://media.giphy.com/media/l3vR4yk0X20KimqJ2/giphy.gif" width="80" style="border-radius:12px;" alt="Motu">',
+            unsafe_allow_html=True,
+        )
 with col_title:
     st.title("Petpooja Assistant")
 
