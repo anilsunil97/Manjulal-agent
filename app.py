@@ -32,7 +32,7 @@ os.environ["GOOGLE_API_KEY"] = get_secret("GOOGLE_API_KEY")
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "petpooja_docs")
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Petpooja Assistant", page_icon="💃", layout="centered")
+st.set_page_config(page_title="Manjulal Reporting", page_icon="💃", layout="centered")
 
 # ── Header with Motu sticker logo ────────────────────────────────────────────
 import base64
@@ -67,7 +67,7 @@ with col_logo:
             unsafe_allow_html=True,
         )
 with col_title:
-    st.title("Petpooja Assistant")
+    st.title("Manjulal Reporting")
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm = ChatGroq(
