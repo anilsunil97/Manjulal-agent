@@ -14,7 +14,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # Load environment variables
 load_dotenv()
@@ -29,7 +29,6 @@ def get_secret(key: str) -> str:
     return value or ""
 
 groq_api_key = get_secret("GROQ_API_KEY")
-os.environ["GOOGLE_API_KEY"] = get_secret("GOOGLE_API_KEY")
 
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "petpooja_docs")
 
@@ -178,23 +177,43 @@ with st.sidebar:
 
 # ── Embedding logic ───────────────────────────────────────────────────────────
 if embed_btn:
-    if not os.environ.get("GOOGLE_API_KEY"):
-        st.error("❌ GOOGLE_API_KEY is not set. Add it to your `.env` file (local) or Streamlit Cloud Secrets (deployed).")
-    else:
-        with st.spinner("Reading and embedding documents…"):
-            all_docs = load_all_docs_from_folder(DOCS_DIR)
-            if not all_docs:
-                st.sidebar.error("No files found in `petpooja_docs`.")
-            else:
-                try:
-                    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-                    split_docs = splitter.split_documents(all_docs)
-                    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
-                    st.session_state.vectors = FAISS.from_documents(split_docs, embeddings)
-                    st.session_state.doc_count = len(split_docs)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Embedding failed: {e}")
+    with st.spinner("Reading and embedding documents…"):
+        all_docs = load_all_docs_from_folder(DOCS_DIR)
+        if not all_docs:
+            st.sidebar.error("No files found in `petpooja_docs`.")
+        else:
+            try:
+                splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                split_docs = splitter.split_documents(all_docs)
+
+                # HuggingFace local embeddings — no API key, no rate limits
+                embeddings = HuggingFaceEmbeddings(
+                    model_name="all-MiniLM-L6-v2",
+                    model_kwargs={"device": "cpu"},
+                    encode_kwargs={"normalize_embeddings": True},
+                )
+
+                progress = st.progress(0, text="Embedding chunks…")
+                total = len(split_docs)
+                BATCH_SIZE = 100
+
+                for i in range(0, total, BATCH_SIZE):
+                    batch = split_docs[i : i + BATCH_SIZE]
+                    if i == 0:
+                        vectorstore = FAISS.from_documents(batch, embeddings)
+                    else:
+                        vectorstore.add_documents(batch)
+                    progress.progress(
+                        min((i + BATCH_SIZE) / total, 1.0),
+                        text=f"Embedding {min(i + BATCH_SIZE, total)}/{total} chunks…"
+                    )
+
+                progress.empty()
+                st.session_state.vectors = vectorstore
+                st.session_state.doc_count = total
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Embedding failed: {e}")
 
 # ── Display chat history ──────────────────────────────────────────────────────
 for msg in st.session_state.messages:
