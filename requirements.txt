@@ -11,4 +11,5 @@ python-dotenv
 pypdf
 openpyxl
 pandas
+python-docx
 google-cloud-aiplatform>=1.38

@@ -1,8 +1,10 @@
 import os
 import io
+import base64
 import time
 import pandas as pd
 import streamlit as st
+from docx import Document as DocxDocument
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -35,9 +37,7 @@ DOCS_DIR = os.path.join(os.path.dirname(__file__), "petpooja_docs")
 st.set_page_config(page_title="Manjulal Agent", page_icon="💃", layout="centered")
 
 # ── Header with Motu sticker logo ────────────────────────────────────────────
-import base64
-
-def load_gif_as_base64(path: str) -> str:
+def load_as_base64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
@@ -46,22 +46,20 @@ with col_logo:
     gif_path = os.path.join(os.path.dirname(__file__), "static", "motu.gif")
     mp4_path = os.path.join(os.path.dirname(__file__), "static", "WhatsApp Video 2026-07-28 at 20.12.36.mp4")
     if os.path.exists(gif_path):
-        gif_b64 = load_gif_as_base64(gif_path)
+        b64 = load_as_base64(gif_path)
         st.markdown(
-            f'<img src="data:image/gif;base64,{gif_b64}" width="80" style="border-radius:12px;" alt="Motu">',
+            f'<img src="data:image/gif;base64,{b64}" width="80" style="border-radius:12px;" alt="Motu">',
             unsafe_allow_html=True,
         )
     elif os.path.exists(mp4_path):
-        with open(mp4_path, "rb") as f:
-            mp4_b64 = base64.b64encode(f.read()).decode()
+        b64 = load_as_base64(mp4_path)
         st.markdown(
             f'<video width="80" autoplay loop muted playsinline style="border-radius:12px;">'
-            f'<source src="data:video/mp4;base64,{mp4_b64}" type="video/mp4">'
+            f'<source src="data:video/mp4;base64,{b64}" type="video/mp4">'
             f'</video>',
             unsafe_allow_html=True,
         )
     else:
-        # Fallback: Motu Patlu GIF from Giphy
         st.markdown(
             '<img src="https://media.giphy.com/media/l3vR4yk0X20KimqJ2/giphy.gif" width="80" style="border-radius:12px;" alt="Motu">',
             unsafe_allow_html=True,
@@ -117,9 +115,18 @@ def load_excel(filepath: str) -> list[Document]:
     return docs
 
 
+def load_docx(filepath: str) -> list[Document]:
+    doc = DocxDocument(filepath)
+    text = "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
+    return [Document(
+        page_content=text,
+        metadata={"source": os.path.basename(filepath)},
+    )]
+
+
 def load_all_docs_from_folder(folder: str) -> list[Document]:
     all_docs = []
-    supported = (".pdf", ".xlsx", ".xls")
+    supported = (".pdf", ".xlsx", ".xls", ".docx")
     files = [f for f in os.listdir(folder) if f.lower().endswith(supported)]
     for filename in files:
         filepath = os.path.join(folder, filename)
@@ -129,6 +136,8 @@ def load_all_docs_from_folder(folder: str) -> list[Document]:
                 all_docs.extend(load_pdf(filepath))
             elif ext in (".xlsx", ".xls"):
                 all_docs.extend(load_excel(filepath))
+            elif ext == ".docx":
+                all_docs.extend(load_docx(filepath))
         except Exception as e:
             st.warning(f"⚠️ Could not load `{filename}`: {e}")
     return all_docs
@@ -140,7 +149,7 @@ if not os.path.isdir(DOCS_DIR):
 
 files_present = [
     f for f in os.listdir(DOCS_DIR)
-    if f.lower().endswith((".pdf", ".xlsx", ".xls"))
+    if f.lower().endswith((".pdf", ".xlsx", ".xls", ".docx"))
 ] if os.path.isdir(DOCS_DIR) else []
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -196,7 +205,6 @@ if question := st.chat_input("Ask me anything…"):
         with st.spinner("Thinking…"):
             try:
                 if "vectors" in st.session_state:
-                    # Document-grounded RAG answer
                     retriever = st.session_state.vectors.as_retriever()
                     rag_chain = (
                         {"context": retriever | format_docs, "input": RunnablePassthrough()}
@@ -206,7 +214,6 @@ if question := st.chat_input("Ask me anything…"):
                     )
                     answer = rag_chain.invoke(question)
                 else:
-                    # Plain conversational answer
                     chain = chat_prompt | llm | StrOutputParser()
                     answer = chain.invoke({"input": question})
 
