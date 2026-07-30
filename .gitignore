@@ -15,6 +15,9 @@ env/
 # Streamlit cache
 .streamlit/secrets.toml
 
+# FAISS index (regenerated automatically)
+faiss_index/
+
 # OS files
 .DS_Store
 Thumbs.db
