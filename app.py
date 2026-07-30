@@ -68,8 +68,10 @@ llm = ChatGroq(groq_api_key=groq_api_key, model_name="openai/gpt-oss-120b")
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 doc_prompt = ChatPromptTemplate.from_template(
-    """You are a helpful assistant. Answer the question using the provided document context.
-If the context does not contain enough information, answer from your general knowledge and mention that.
+    """You are a Petpooja support assistant. Answer ONLY using the provided document context below.
+If the answer is not found in the context, respond with:
+"I'm sorry, I don't have information on that in the provided documents. Please contact Petpooja support for further help."
+Do NOT use general knowledge or make up answers.
 
 Context:
 {context}
@@ -80,7 +82,11 @@ Answer:"""
 )
 
 chat_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful, friendly assistant. Answer clearly and concisely."),
+    ("system", """You are a Petpooja support assistant.
+Only respond to greetings like hello, hi, good morning, how are you, etc.
+For any other question, respond with:
+"Please click 'Load & Embed Documents' first so I can answer your question from the documents."
+Do NOT answer general knowledge questions."""),
     ("human", "{input}"),
 ])
 
