@@ -178,17 +178,23 @@ with st.sidebar:
 
 # ── Embedding logic ───────────────────────────────────────────────────────────
 if embed_btn:
-    with st.spinner("Reading and embedding documents…"):
-        all_docs = load_all_docs_from_folder(DOCS_DIR)
-        if not all_docs:
-            st.sidebar.error("No files found in `petpooja_docs`.")
-        else:
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            split_docs = splitter.split_documents(all_docs)
-            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
-            st.session_state.vectors = FAISS.from_documents(split_docs, embeddings)
-            st.session_state.doc_count = len(split_docs)
-            st.rerun()
+    if not os.environ.get("GOOGLE_API_KEY"):
+        st.error("❌ GOOGLE_API_KEY is not set. Add it to your `.env` file (local) or Streamlit Cloud Secrets (deployed).")
+    else:
+        with st.spinner("Reading and embedding documents…"):
+            all_docs = load_all_docs_from_folder(DOCS_DIR)
+            if not all_docs:
+                st.sidebar.error("No files found in `petpooja_docs`.")
+            else:
+                try:
+                    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                    split_docs = splitter.split_documents(all_docs)
+                    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+                    st.session_state.vectors = FAISS.from_documents(split_docs, embeddings)
+                    st.session_state.doc_count = len(split_docs)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Embedding failed: {e}")
 
 # ── Display chat history ──────────────────────────────────────────────────────
 for msg in st.session_state.messages:
