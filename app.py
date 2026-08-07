@@ -46,34 +46,60 @@ st.set_page_config(page_title="Manjulal Agent", page_icon="💃", layout="center
 # ── Hide sidebar completely ───────────────────────────────────────────────────
 st.markdown("""
 <style>
-    [data-testid="stSidebar"]         { display: none !important; }
-    [data-testid="collapsedControl"]  { display: none !important; }
+    [data-testid="stSidebar"]        { display: none !important; }
+    [data-testid="collapsedControl"] { display: none !important; }
+
+    /* Centre the header block */
+    .header-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem 0 0.5rem 0;
+        gap: 0.5rem;
+    }
+    .header-wrap img,
+    .header-wrap video {
+        border-radius: 50%;
+        width: 90px;
+        height: 90px;
+        object-fit: cover;
+    }
+    .header-wrap h1 {
+        margin: 0;
+        font-size: 1.8rem;
+        text-align: center;
+    }
+
+    /* New Chat button sits above the chat-input bar */
+    div[data-testid="stChatInput"] { margin-top: 0.25rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# ── Header — centred logo + title ────────────────────────────────────────────
 def load_as_base64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
-col_logo, col_title = st.columns([1, 5])
-with col_logo:
-    gif_path = os.path.join(os.path.dirname(__file__), "static", "motu.gif")
-    mp4_path = os.path.join(os.path.dirname(__file__), "static", "WhatsApp Video 2026-07-28 at 20.12.36.mp4")
-    if os.path.exists(gif_path):
-        b64 = load_as_base64(gif_path)
-        st.markdown(f'<img src="data:image/gif;base64,{b64}" width="80" style="border-radius:12px;">',
-                    unsafe_allow_html=True)
-    elif os.path.exists(mp4_path):
-        b64 = load_as_base64(mp4_path)
-        st.markdown(f'<video width="80" autoplay loop muted playsinline style="border-radius:12px;">'
-                    f'<source src="data:video/mp4;base64,{b64}" type="video/mp4"></video>',
-                    unsafe_allow_html=True)
-    else:
-        st.markdown('<img src="https://media.giphy.com/media/l3vR4yk0X20KimqJ2/giphy.gif" width="80" style="border-radius:12px;">',
-                    unsafe_allow_html=True)
-with col_title:
-    st.title("Manjulal Agent")
+gif_path = os.path.join(os.path.dirname(__file__), "static", "motu.gif")
+mp4_path = os.path.join(os.path.dirname(__file__), "static", "WhatsApp Video 2026-07-28 at 20.12.36.mp4")
+
+if os.path.exists(gif_path):
+    b64   = load_as_base64(gif_path)
+    media = f'<img src="data:image/gif;base64,{b64}">'
+elif os.path.exists(mp4_path):
+    b64   = load_as_base64(mp4_path)
+    media = (f'<video autoplay loop muted playsinline>'
+             f'<source src="data:video/mp4;base64,{b64}" type="video/mp4"></video>')
+else:
+    media = '<img src="https://media.giphy.com/media/l3vR4yk0X20KimqJ2/giphy.gif">'
+
+st.markdown(f"""
+<div class="header-wrap">
+    {media}
+    <h1>Manjulal Agent</h1>
+</div>
+""", unsafe_allow_html=True)
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm = ChatGroq(groq_api_key=groq_api_key, model_name="openai/gpt-oss-120b")
@@ -304,16 +330,15 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── New Chat button + Chat input ──────────────────────────────────────────────
-col_new, col_input = st.columns([1, 5])
-
-with col_new:
+# ── New Chat button (above input bar) ────────────────────────────────────────
+col_l, col_btn, col_r = st.columns([3, 2, 3])
+with col_btn:
     if st.button("🗑️ New Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-with col_input:
-    question = st.chat_input("Ask me anything about Petpooja…")
+# ── Chat input — must be at top level, NOT inside a column ───────────────────
+question = st.chat_input("Ask me anything about Petpooja…")
 
 if question:
     st.session_state.messages.append({"role": "user", "content": question})
