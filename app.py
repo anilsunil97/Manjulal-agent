@@ -1,7 +1,5 @@
 import os
-import io
 import base64
-import time
 import hashlib
 import json
 import pandas as pd
@@ -38,12 +36,20 @@ def get_secret(key: str) -> str:
 
 groq_api_key = get_secret("GROQ_API_KEY")
 
-DOCS_DIR    = os.path.join(os.path.dirname(__file__), "petpooja_docs")
-INDEX_DIR   = os.path.join(os.path.dirname(__file__), "faiss_index")
-HASH_FILE   = os.path.join(INDEX_DIR, "docs_hash.json")
+DOCS_DIR  = os.path.join(os.path.dirname(__file__), "petpooja_docs")
+INDEX_DIR = os.path.join(os.path.dirname(__file__), "faiss_index")
+HASH_FILE = os.path.join(INDEX_DIR, "docs_hash.json")
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Manjulal Agent", page_icon="💃", layout="centered")
+
+# ── Hide sidebar completely ───────────────────────────────────────────────────
+st.markdown("""
+<style>
+    [data-testid="stSidebar"]         { display: none !important; }
+    [data-testid="collapsedControl"]  { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
 def load_as_base64(path: str) -> str:
@@ -109,19 +115,15 @@ def format_docs(docs):
 
 # ── File loaders ──────────────────────────────────────────────────────────────
 def load_pdf(filepath):
-    """Load PDF using PyPDFLoader; fall back to pdfplumber for scanned/complex PDFs."""
+    """Load PDF via PyPDFLoader; fall back to pdfplumber for empty/scanned pages."""
     docs = PyPDFLoader(filepath).load()
-    # If all pages came back empty, try pdfplumber
     if PDFPLUMBER_AVAILABLE and all(not d.page_content.strip() for d in docs):
         plumber_docs = []
         with pdfplumber.open(filepath) as pdf:
             for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
-                # Also extract any tables on the page
                 for table in page.extract_tables():
-                    rows = []
-                    for row in table:
-                        rows.append(" | ".join(cell or "" for cell in row))
+                    rows = [" | ".join(cell or "" for cell in row) for row in table]
                     text += "\n" + "\n".join(rows)
                 if text.strip():
                     plumber_docs.append(Document(
@@ -142,30 +144,24 @@ def load_excel(filepath):
     return docs
 
 def load_docx(filepath):
-    """Load docx extracting both paragraphs and table content."""
+    """Extract paragraphs and table rows from a docx file."""
     doc = DocxDocument(filepath)
     parts = []
-
-    # Extract paragraphs
     for para in doc.paragraphs:
         if para.text.strip():
             parts.append(para.text.strip())
-
-    # Extract tables — each row becomes a pipe-separated line
     for table in doc.tables:
         for row in table.rows:
-            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
             if cells:
                 parts.append(" | ".join(cells))
-
-    text = "\n".join(parts)
-    return [Document(page_content=text, metadata={"source": os.path.basename(filepath)})]
+    return [Document(page_content="\n".join(parts),
+                     metadata={"source": os.path.basename(filepath)})]
 
 def load_all_docs_from_folder(folder):
     all_docs = []
     supported = (".pdf", ".xlsx", ".xls", ".docx")
     for filename in os.listdir(folder):
-        # Skip Office temp/lock files (e.g. ~$filename.docx)
         if filename.startswith("~$"):
             continue
         if not filename.lower().endswith(supported):
@@ -184,14 +180,13 @@ def load_all_docs_from_folder(folder):
     return all_docs
 
 
-# ── Hash helpers — detect if docs folder changed ──────────────────────────────
+# ── Hash helpers ──────────────────────────────────────────────────────────────
 def compute_docs_hash(folder):
-    """MD5 hash of all filenames + modification times in the folder."""
     supported = (".pdf", ".xlsx", ".xls", ".docx")
     entries = sorted([
         (f, os.path.getmtime(os.path.join(folder, f)))
         for f in os.listdir(folder)
-        if f.lower().endswith(supported)
+        if f.lower().endswith(supported) and not f.startswith("~$")
     ])
     return hashlib.md5(json.dumps(entries).encode()).hexdigest()
 
@@ -207,8 +202,8 @@ def save_hash(h):
         json.dump({"hash": h}, f)
 
 
-# ── Embeddings model (cached so it loads only once) ───────────────────────────
-@st.cache_resource(show_spinner="Loading embedding model…")
+# ── Embeddings (cached — loads once per session) ──────────────────────────────
+@st.cache_resource(show_spinner=False)
 def get_embeddings():
     return HuggingFaceEmbeddings(
         model_name="all-MiniLM-L6-v2",
@@ -217,43 +212,36 @@ def get_embeddings():
     )
 
 
-# ── Load or build vector store ────────────────────────────────────────────────
-def build_and_save_index(docs_dir):
+# ── Build index silently (no progress bar shown to user) ─────────────────────
+def build_index_silent(docs_dir):
     embeddings = get_embeddings()
     all_docs = load_all_docs_from_folder(docs_dir)
     if not all_docs:
-        return None, 0
+        return None
 
-    # Smaller chunks = more focused retrieval = more precise answers
     splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
     split_docs = splitter.split_documents(all_docs)
-    total = len(split_docs)
 
-    progress = st.progress(0, text="Embedding chunks…")
     BATCH_SIZE = 100
     vectorstore = None
-    for i in range(0, total, BATCH_SIZE):
+    for i in range(0, len(split_docs), BATCH_SIZE):
         batch = split_docs[i: i + BATCH_SIZE]
         if vectorstore is None:
             vectorstore = FAISS.from_documents(batch, embeddings)
         else:
             vectorstore.add_documents(batch)
-        progress.progress(min((i + BATCH_SIZE) / total, 1.0),
-                          text=f"Embedding {min(i + BATCH_SIZE, total)}/{total} chunks…")
-    progress.empty()
 
-    # Save index to disk — will be reused on next startup if docs haven't changed
     os.makedirs(INDEX_DIR, exist_ok=True)
     vectorstore.save_local(INDEX_DIR)
     save_hash(compute_docs_hash(docs_dir))
-    return vectorstore, total
+    return vectorstore
 
 def load_index_from_disk():
-    embeddings = get_embeddings()
-    return FAISS.load_local(INDEX_DIR, embeddings, allow_dangerous_deserialization=True)
+    return FAISS.load_local(INDEX_DIR, get_embeddings(),
+                            allow_dangerous_deserialization=True)
 
 
-# ── Auto-load index on startup if it exists and docs haven't changed ──────────
+# ── Background auto-indexing on every startup ─────────────────────────────────
 if not os.path.isdir(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
@@ -263,99 +251,43 @@ files_present = [f for f in os.listdir(DOCS_DIR)
 
 index_exists = os.path.exists(os.path.join(INDEX_DIR, "index.faiss"))
 
-if "vectors" not in st.session_state and index_exists:
-    current_hash = compute_docs_hash(DOCS_DIR) if files_present else ""
-    saved_hash   = load_saved_hash()
-    if current_hash == saved_hash:
-        # Docs unchanged — load saved index silently, no re-chunking needed
-        try:
-            st.session_state.vectors   = load_index_from_disk()
-            st.session_state.doc_count = "cached"
-        except Exception:
-            pass
+if "vectors" not in st.session_state:
+    if files_present:
+        current_hash = compute_docs_hash(DOCS_DIR)
+        saved_hash   = load_saved_hash()
+
+        if index_exists and current_hash == saved_hash:
+            # Index is fresh — load from disk instantly
+            try:
+                st.session_state.vectors = load_index_from_disk()
+            except Exception:
+                st.session_state.vectors = build_index_silent(DOCS_DIR)
+        else:
+            # Docs added/changed or no index yet — build silently
+            st.session_state.vectors = build_index_silent(DOCS_DIR)
+
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("📁 Document Mode")
-
-    # ── Upload new documents ──────────────────────────────────────────────────
-    st.subheader("📤 Upload Documents")
-    uploaded_files = st.file_uploader(
-        "Add PDF, DOCX, or Excel files",
-        type=["pdf", "docx", "xlsx", "xls"],
-        accept_multiple_files=True,
-        help="Files are saved to petpooja_docs and indexed automatically."
-    )
-    if uploaded_files:
-        saved_names = []
-        for uf in uploaded_files:
-            save_path = os.path.join(DOCS_DIR, uf.name)
-            with open(save_path, "wb") as f:
-                f.write(uf.getbuffer())
-            saved_names.append(uf.name)
-        st.success(f"✅ Saved: {', '.join(saved_names)}\nClick Re-Embed to index them.")
-        st.rerun()
-
-    st.divider()
-
-    docs_changed = files_present and (compute_docs_hash(DOCS_DIR) != load_saved_hash())
-
-    # Only show embed button if docs changed or no index exists yet
-    if docs_changed or not index_exists:
-        embed_btn = st.button(
-            "🔄 Re-Embed Documents" if (docs_changed and index_exists) else "📥 Build Index",
-            use_container_width=True,
-            help="Docs have changed — re-embed recommended" if docs_changed else "Build the search index from your documents"
-        )
-    else:
-        embed_btn = False
-        st.info("✅ Index is up to date. No re-embedding needed.")
-
-    if "vectors" in st.session_state:
-        label = st.session_state.get("doc_count", "")
-        if label == "cached":
-            st.success("✅ Loaded from saved index")
-        else:
-            st.success(f"✅ {label} chunks embedded")
-        if docs_changed:
-            st.warning("⚠️ Documents changed — click Re-Embed")
-    else:
-        st.info("No index loaded yet.\nChat works in general mode.")
-
-    if st.button("🗑️ Clear Chat", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
-
-    if st.button("🔄 Reset Index", use_container_width=True):
-        for key in ["vectors", "doc_count"]:
-            st.session_state.pop(key, None)
-        st.rerun()
-
-# ── Embed on button click ─────────────────────────────────────────────────────
-if embed_btn:
-    if not files_present:
-        st.error("No files found in `petpooja_docs`.")
-    else:
-        try:
-            vectorstore, total = build_and_save_index(DOCS_DIR)
-            if vectorstore:
-                st.session_state.vectors   = vectorstore
-                st.session_state.doc_count = total
-                st.rerun()
-        except Exception as e:
-            st.error(f"❌ Embedding failed: {e}")
 
 # ── Chat history ──────────────────────────────────────────────────────────────
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── Chat input ────────────────────────────────────────────────────────────────
-if question := st.chat_input("Ask me anything…"):
+# ── New Chat button + Chat input ──────────────────────────────────────────────
+col_new, col_input = st.columns([1, 5])
+
+with col_new:
+    if st.button("🗑️ New Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+with col_input:
+    question = st.chat_input("Ask me anything about Petpooja…")
+
+if question:
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
@@ -363,8 +295,7 @@ if question := st.chat_input("Ask me anything…"):
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             try:
-                if "vectors" in st.session_state:
-                    # MMR retrieval: fetch 6 diverse, relevant chunks for precise answers
+                if "vectors" in st.session_state and st.session_state.vectors:
                     retriever = st.session_state.vectors.as_retriever(
                         search_type="mmr",
                         search_kwargs={"k": 6, "fetch_k": 20, "lambda_mult": 0.7}
