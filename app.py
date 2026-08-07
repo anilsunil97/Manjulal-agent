@@ -84,8 +84,9 @@ doc_prompt = ChatPromptTemplate.from_template(
 
 Rules:
 - Give a direct, specific answer. No filler or preamble.
+- Context may include table rows in "Header\\nService | Price1 | Price2..." format — read them carefully.
+- For pricing questions, always state: Service Name, New Price (without tax), New Price (with tax), Renewal Price (without tax), Renewal Price (with tax).
 - Use bullet points or numbered steps only when the answer is a process or list.
-- If multiple relevant details exist, include them briefly.
 - If the answer is not in the context, respond with exactly: "We are updating more information."
 - Do NOT use general knowledge or make up answers.
 
@@ -115,23 +116,50 @@ def format_docs(docs):
 
 # ── File loaders ──────────────────────────────────────────────────────────────
 def load_pdf(filepath):
-    """Load PDF via PyPDFLoader; fall back to pdfplumber for empty/scanned pages."""
-    docs = PyPDFLoader(filepath).load()
-    if PDFPLUMBER_AVAILABLE and all(not d.page_content.strip() for d in docs):
-        plumber_docs = []
-        with pdfplumber.open(filepath) as pdf:
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
-                for table in page.extract_tables():
-                    rows = [" | ".join(cell or "" for cell in row) for row in table]
-                    text += "\n" + "\n".join(rows)
-                if text.strip():
-                    plumber_docs.append(Document(
-                        page_content=text.strip(),
-                        metadata={"source": os.path.basename(filepath), "page": i}
+    """Load PDF using pdfplumber.
+    - Table rows are emitted as individual Documents (one row = one doc) so
+      each service/price entry gets its own chunk and is retrieved precisely.
+    - Non-table text is kept as a single page-level Document.
+    - Falls back to PyPDFLoader only if pdfplumber is not available.
+    """
+    source = os.path.basename(filepath)
+    if not PDFPLUMBER_AVAILABLE:
+        return PyPDFLoader(filepath).load()
+
+    docs = []
+    with pdfplumber.open(filepath) as pdf:
+        for i, page in enumerate(pdf.pages):
+            # Collect header row for this page (first row of first table)
+            header = None
+            tables = page.extract_tables()
+
+            # Extract table rows as individual documents
+            for table in tables:
+                for row_idx, row in enumerate(table):
+                    cells = [str(c or "").strip() for c in row]
+                    row_text = " | ".join(cells)
+                    if not any(cells):
+                        continue
+                    # Treat first row as header — combine with every data row
+                    if row_idx == 0:
+                        header = row_text
+                        continue
+                    # Prepend header so each chunk is self-contained
+                    content = f"{header}\n{row_text}" if header else row_text
+                    docs.append(Document(
+                        page_content=content,
+                        metadata={"source": source, "page": i, "type": "table_row"}
                     ))
-        return plumber_docs if plumber_docs else docs
-    return docs
+
+            # Also capture plain text (paragraphs outside tables)
+            plain_text = page.extract_text() or ""
+            if plain_text.strip():
+                docs.append(Document(
+                    page_content=plain_text.strip(),
+                    metadata={"source": source, "page": i, "type": "text"}
+                ))
+
+    return docs if docs else PyPDFLoader(filepath).load()
 
 def load_excel(filepath):
     docs = []
@@ -298,7 +326,7 @@ if question:
                 if "vectors" in st.session_state and st.session_state.vectors:
                     retriever = st.session_state.vectors.as_retriever(
                         search_type="mmr",
-                        search_kwargs={"k": 6, "fetch_k": 20, "lambda_mult": 0.7}
+                        search_kwargs={"k": 8, "fetch_k": 30, "lambda_mult": 0.6}
                     )
                     rag_chain = (
                         {"context": retriever | format_docs, "input": RunnablePassthrough()}
