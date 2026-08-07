@@ -18,6 +18,12 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -68,10 +74,14 @@ llm = ChatGroq(groq_api_key=groq_api_key, model_name="openai/gpt-oss-120b")
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 doc_prompt = ChatPromptTemplate.from_template(
-    """You are a Petpooja support assistant. Answer ONLY using the provided document context below.
-If the answer is not found in the context, respond with:
-"I'm sorry, I don't have information on that in the provided documents. Please contact Petpooja support for further help."
-Do NOT use general knowledge or make up answers.
+    """You are a Petpooja support assistant. Answer the question precisely and concisely using ONLY the context below.
+
+Rules:
+- Give a direct, specific answer. No filler or preamble.
+- Use bullet points or numbered steps only when the answer is a process or list.
+- If multiple relevant details exist, include them briefly.
+- If the answer is not in the context, respond with exactly: "We are updating more information."
+- Do NOT use general knowledge or make up answers.
 
 Context:
 {context}
@@ -82,11 +92,14 @@ Answer:"""
 )
 
 chat_prompt = ChatPromptTemplate.from_messages([
-    ("system", """You are a Petpooja support assistant.
-Only respond to greetings like hello, hi, good morning, how are you, etc.
-For any other question, respond with:
-"Please click 'Load & Embed Documents' first so I can answer your question from the documents."
-Do NOT answer general knowledge questions."""),
+    ("system", """You are a Petpooja support assistant. Your sole purpose is to help users with Petpooja dashboard functionality and pricing.
+
+Rules:
+1. For greetings (hello, hi, good morning, how are you, etc.) reply briefly and friendly, then suggest the user ask about Petpooja dashboard features or pricing. Example: "Hi there! Feel free to ask me about Petpooja dashboard functionality or pricing."
+2. For ANY other topic that is not related to Petpooja dashboard functionality or pricing, respond with exactly:
+   "I'm here to help with Petpooja dashboard functionality and pricing. Please ask me something related to that!"
+3. Do NOT answer general knowledge, coding, weather, or any off-topic questions.
+4. Keep all responses concise and on-topic."""),
     ("human", "{input}"),
 ])
 
@@ -96,7 +109,27 @@ def format_docs(docs):
 
 # ── File loaders ──────────────────────────────────────────────────────────────
 def load_pdf(filepath):
-    return PyPDFLoader(filepath).load()
+    """Load PDF using PyPDFLoader; fall back to pdfplumber for scanned/complex PDFs."""
+    docs = PyPDFLoader(filepath).load()
+    # If all pages came back empty, try pdfplumber
+    if PDFPLUMBER_AVAILABLE and all(not d.page_content.strip() for d in docs):
+        plumber_docs = []
+        with pdfplumber.open(filepath) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                # Also extract any tables on the page
+                for table in page.extract_tables():
+                    rows = []
+                    for row in table:
+                        rows.append(" | ".join(cell or "" for cell in row))
+                    text += "\n" + "\n".join(rows)
+                if text.strip():
+                    plumber_docs.append(Document(
+                        page_content=text.strip(),
+                        metadata={"source": os.path.basename(filepath), "page": i}
+                    ))
+        return plumber_docs if plumber_docs else docs
+    return docs
 
 def load_excel(filepath):
     docs = []
@@ -109,14 +142,32 @@ def load_excel(filepath):
     return docs
 
 def load_docx(filepath):
+    """Load docx extracting both paragraphs and table content."""
     doc = DocxDocument(filepath)
-    text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    parts = []
+
+    # Extract paragraphs
+    for para in doc.paragraphs:
+        if para.text.strip():
+            parts.append(para.text.strip())
+
+    # Extract tables — each row becomes a pipe-separated line
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+
+    text = "\n".join(parts)
     return [Document(page_content=text, metadata={"source": os.path.basename(filepath)})]
 
 def load_all_docs_from_folder(folder):
     all_docs = []
     supported = (".pdf", ".xlsx", ".xls", ".docx")
     for filename in os.listdir(folder):
+        # Skip Office temp/lock files (e.g. ~$filename.docx)
+        if filename.startswith("~$"):
+            continue
         if not filename.lower().endswith(supported):
             continue
         filepath = os.path.join(folder, filename)
@@ -173,7 +224,8 @@ def build_and_save_index(docs_dir):
     if not all_docs:
         return None, 0
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    # Smaller chunks = more focused retrieval = more precise answers
+    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
     split_docs = splitter.split_documents(all_docs)
     total = len(split_docs)
 
@@ -190,7 +242,7 @@ def build_and_save_index(docs_dir):
                           text=f"Embedding {min(i + BATCH_SIZE, total)}/{total} chunks…")
     progress.empty()
 
-    # Save index to disk
+    # Save index to disk — will be reused on next startup if docs haven't changed
     os.makedirs(INDEX_DIR, exist_ok=True)
     vectorstore.save_local(INDEX_DIR)
     save_hash(compute_docs_hash(docs_dir))
@@ -206,18 +258,21 @@ if not os.path.isdir(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
 files_present = [f for f in os.listdir(DOCS_DIR)
-                 if f.lower().endswith((".pdf", ".xlsx", ".xls", ".docx"))]
+                 if f.lower().endswith((".pdf", ".xlsx", ".xls", ".docx"))
+                 and not f.startswith("~$")]
 
-if "vectors" not in st.session_state and os.path.exists(os.path.join(INDEX_DIR, "index.faiss")):
+index_exists = os.path.exists(os.path.join(INDEX_DIR, "index.faiss"))
+
+if "vectors" not in st.session_state and index_exists:
     current_hash = compute_docs_hash(DOCS_DIR) if files_present else ""
     saved_hash   = load_saved_hash()
     if current_hash == saved_hash:
-        # Docs unchanged — load from disk silently
+        # Docs unchanged — load saved index silently, no re-chunking needed
         try:
             st.session_state.vectors   = load_index_from_disk()
             st.session_state.doc_count = "cached"
         except Exception:
-            pass  # will rebuild on next button click
+            pass
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
@@ -227,12 +282,38 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("📁 Document Mode")
 
-    docs_changed = files_present and (compute_docs_hash(DOCS_DIR) != load_saved_hash())
-    embed_btn = st.button(
-        "🔄 Re-Embed Documents" if docs_changed else "📥 Load & Embed Documents",
-        use_container_width=True,
-        help="Docs have changed — re-embed recommended" if docs_changed else ""
+    # ── Upload new documents ──────────────────────────────────────────────────
+    st.subheader("📤 Upload Documents")
+    uploaded_files = st.file_uploader(
+        "Add PDF, DOCX, or Excel files",
+        type=["pdf", "docx", "xlsx", "xls"],
+        accept_multiple_files=True,
+        help="Files are saved to petpooja_docs and indexed automatically."
     )
+    if uploaded_files:
+        saved_names = []
+        for uf in uploaded_files:
+            save_path = os.path.join(DOCS_DIR, uf.name)
+            with open(save_path, "wb") as f:
+                f.write(uf.getbuffer())
+            saved_names.append(uf.name)
+        st.success(f"✅ Saved: {', '.join(saved_names)}\nClick Re-Embed to index them.")
+        st.rerun()
+
+    st.divider()
+
+    docs_changed = files_present and (compute_docs_hash(DOCS_DIR) != load_saved_hash())
+
+    # Only show embed button if docs changed or no index exists yet
+    if docs_changed or not index_exists:
+        embed_btn = st.button(
+            "🔄 Re-Embed Documents" if (docs_changed and index_exists) else "📥 Build Index",
+            use_container_width=True,
+            help="Docs have changed — re-embed recommended" if docs_changed else "Build the search index from your documents"
+        )
+    else:
+        embed_btn = False
+        st.info("✅ Index is up to date. No re-embedding needed.")
 
     if "vectors" in st.session_state:
         label = st.session_state.get("doc_count", "")
@@ -283,7 +364,11 @@ if question := st.chat_input("Ask me anything…"):
         with st.spinner("Thinking…"):
             try:
                 if "vectors" in st.session_state:
-                    retriever = st.session_state.vectors.as_retriever()
+                    # MMR retrieval: fetch 6 diverse, relevant chunks for precise answers
+                    retriever = st.session_state.vectors.as_retriever(
+                        search_type="mmr",
+                        search_kwargs={"k": 6, "fetch_k": 20, "lambda_mult": 0.7}
+                    )
                     rag_chain = (
                         {"context": retriever | format_docs, "input": RunnablePassthrough()}
                         | doc_prompt | llm | StrOutputParser()
