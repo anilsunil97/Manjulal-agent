@@ -153,6 +153,26 @@ Guidelines:
 def format_docs(docs):
     return "\n\n".join(d.page_content for d in docs)
 
+# ── Query router: decide if question needs RAG or general chat ────────────────
+_PETPOOJA_KEYWORDS = {
+    "petpooja", "pos", "dashboard", "captain", "captain app", "billing",
+    "invoice", "price", "pricing", "renewal", "subscription", "menu",
+    "table", "order", "kot", "report", "sales", "tax", "discount",
+    "zomato", "swiggy", "integration", "printer", "receipt", "bill",
+    "item", "category", "outlet", "restaurant", "counter", "settlement",
+    "payroll", "inventory", "kiosk", "led", "display", "feedback",
+    "loyalty", "wallet", "qr", "scan", "kds", "kitchen", "tally",
+    "mapping", "configuration", "config", "settings", "setup", "login",
+    "register", "employee", "staff", "waiter", "tip", "cover", "area",
+    "locality", "variation", "group", "virtual", "physical", "schedule",
+    "commission", "notification", "summary", "insight", "report"
+}
+
+def is_petpooja_query(text: str) -> bool:
+    """Return True if the question is about Petpooja — route to RAG."""
+    lowered = text.lower()
+    return any(kw in lowered for kw in _PETPOOJA_KEYWORDS)
+
 
 # ── File loaders ──────────────────────────────────────────────────────────────
 def load_pdf(filepath):
@@ -345,7 +365,8 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             try:
-                if vectorstore:
+                if vectorstore and is_petpooja_query(question):
+                    # Petpooja-related → RAG over documents
                     retriever = vectorstore.as_retriever(
                         search_type="mmr",
                         search_kwargs={"k": 8, "fetch_k": 30, "lambda_mult": 0.6}
@@ -356,6 +377,7 @@ if question:
                     )
                     answer = rag_chain.invoke(question)
                 else:
+                    # General conversation → friendly chat
                     chain  = chat_prompt | llm | StrOutputParser()
                     answer = chain.invoke({"input": question})
 
