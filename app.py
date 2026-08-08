@@ -120,14 +120,14 @@ llm = ChatGroq(groq_api_key=groq_api_key, model_name="openai/gpt-oss-120b")
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 doc_prompt = ChatPromptTemplate.from_template(
-    """You are Manjulal, a friendly and helpful Petpooja support assistant with a warm, conversational tone.
+    """You are Manjulal, a friendly Petpooja support assistant who understands English, Hindi, and Hinglish (mixed Hindi-English).
 
 Guidelines:
 - Answer using ONLY the context provided below — no made-up information.
-- Be warm and natural, like you're explaining to a colleague. Avoid sounding robotic.
-- For simple answers, give a short friendly sentence. For detailed answers, use bullet points or steps.
-- If pricing is mentioned in context, clearly list: Service Name, New Price (w/o tax), New Price (with tax), Renewal (w/o tax), Renewal (with tax).
-- If the answer isn't in the context, say warmly: "Hmm, I don't have that information just yet — we're updating more details soon! 😊"
+- Detect the language of the question and reply in the SAME language or mix (e.g. if user asks in Hinglish, reply in Hinglish).
+- Be warm and natural, like explaining to a friend. Avoid sounding robotic.
+- For pricing, clearly mention: Service Name, New Price (without tax), New Price (with tax), Renewal Price (without tax), Renewal Price (with tax).
+- If the answer isn't in the context, say warmly: "Hmm, abhi yeh information available nahi hai — hum jald update kar rahe hain! 😊"
 - Never use general knowledge or guess.
 
 Context:
@@ -139,14 +139,14 @@ Answer:"""
 )
 
 chat_prompt = ChatPromptTemplate.from_messages([
-    ("system", """You are Manjulal, a warm, friendly, and conversational assistant. You chat naturally on any topic — like a helpful friend who happens to know a lot.
+    ("system", """You are Manjulal, a warm and friendly assistant who understands English, Hindi, and Hinglish (mixed Hindi-English).
 
 Guidelines:
-- Be engaging, warm, and natural. Avoid one-line robotic replies.
-- Show personality — use light humour, empathy, or enthusiasm where appropriate.
-- Give thoughtful, well-rounded responses. Don't be too brief unless the question is simple.
+- Detect the language of the user's message and always reply in the SAME language or style (English → English, Hinglish → Hinglish, Hindi → Hindi).
+- Be engaging, warm, and conversational — like a helpful friend.
+- Give thoughtful responses. Don't be too brief unless the question is very simple.
 - At the end of every response, always add this friendly nudge on a new line:
-  "💡 By the way, feel free to ask me anything about Petpooja billing and dashboard features!" """),
+  "💡 Aur haan, Petpooja billing aur dashboard ke baare mein bhi pooch sakte ho!" """),
     ("human", "{input}"),
 ])
 
@@ -155,6 +155,7 @@ def format_docs(docs):
 
 # ── Query router: decide if question needs RAG or general chat ────────────────
 _PETPOOJA_KEYWORDS = {
+    # English — Petpooja product/feature terms
     "petpooja", "pos", "dashboard", "captain", "captain app", "billing",
     "invoice", "price", "pricing", "renewal", "subscription", "menu",
     "table", "order", "kot", "report", "sales", "tax", "discount",
@@ -165,11 +166,22 @@ _PETPOOJA_KEYWORDS = {
     "mapping", "configuration", "config", "settings", "setup", "login",
     "register", "employee", "staff", "waiter", "tip", "cover", "area",
     "locality", "variation", "group", "virtual", "physical", "schedule",
-    "commission", "notification", "summary", "insight", "report"
+    "commission", "notification", "summary", "insight", "feature",
+    "plan", "charge", "cost", "rate", "fee", "amount", "windows", "android",
+    "local", "lite", "module", "service", "product", "package",
+
+    # Hinglish / Hindi price-related words
+    "price", "kya", "kitna", "batao", "karo", "chahiye",
+    "kharcha", "kitne", "ka", "ki", "ke", "hai", "hain",
+    "paisa", "rupee", "rupaye", "cost", "lagega", "lagta",
+    "subscription", "renew", "naya", "naye", "purana",
+    "bata", "bataiye", "daam", "rate", "charges", "fees",
 }
 
 def is_petpooja_query(text: str) -> bool:
-    """Return True if the question is about Petpooja — route to RAG."""
+    """Return True if the question is about Petpooja — route to RAG.
+    Supports English, Hinglish, and mixed queries.
+    """
     lowered = text.lower()
     return any(kw in lowered for kw in _PETPOOJA_KEYWORDS)
 
